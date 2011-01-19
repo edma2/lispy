@@ -73,7 +73,6 @@ Object *read(FILE *f) {
     s = getTokens(buf);
     if (s == NULL)
         fprintf(stderr, "read: mismatched parens\n");
-
     return parseTokens(&s);
 }
 
@@ -97,11 +96,11 @@ Object *newObj(void *data, enum otype type) {
     obj = malloc(sizeof(Object));
     if (obj == NULL)
         return NULL;
-
     if (type == SYM) {
         obj->data.symbol = strdup((char *)data);
         /* Check that strdup succeeded */
         if (obj->data.symbol == NULL) {
+            fprintf(stderr, "error: malloc() failed\n");
             free(obj);
             return NULL;
         }
@@ -112,7 +111,6 @@ Object *newObj(void *data, enum otype type) {
     } 
     /* if type is NIL, only assign the object a type */
     obj->type = type;
-
     return obj;
 }
 
@@ -142,7 +140,6 @@ Object *newPair(Object *car, Object *cdr) {
         free(p);
         return NULL;
     }
-
     return obj;
 }
 
@@ -251,7 +248,6 @@ Object *parseTokens(Stack **s) {
         free(stack_pop(s));
         expr = cons(newSym("quote"), cons(expr, newNil()));
     }
-
     return expr;
 }
 
@@ -271,20 +267,23 @@ Stack *getTokens(char *buf) {
                 depth--;
             snprintf(atom, ATOMLEN, "%c", *buf++);
             str = strdup(atom);
-            if (str == NULL)
+            if (str == NULL) {
+                fprintf(stderr, "error: malloc() failed\n");
                 break;
+            }
             stack_push(&s, str);
         } else if (*buf != ' ' && *buf != '\n') {
             for (i = 0; i < ATOMLEN-1; i++) {
-                /* break out of the loop if we see these chars */
-                if (!*buf || strchr("\n ()", *buf) != NULL)
+                if (!*buf || *buf == '\n' || *buf == ' ' || *buf == '(' || *buf == ')')
                     break;
                 atom[i] = *buf++;
             }
             atom[i] = '\0';
             str = strdup(atom);
-            if (str == NULL)
+            if (str == NULL) {
+                fprintf(stderr, "error: malloc() failed\n");
                 break;
+            }
             stack_push(&s, str);
         } else {
             /* eat whitespace */
@@ -305,21 +304,17 @@ Stack *getTokens(char *buf) {
 int isNum(char *atom) {
     int decimalcount = 0;
 
+    if (*atom == '-')
+        atom++;
     if (*atom == '\0')
         return 0;
-    /* check sign */
-    if (*atom == '-') {
-        if (*(atom + 1) == '\0')
-            return 0;
-        atom++;
-    }
     for (; *atom != '\0'; atom++) {
         if (*atom == '.') {
             if (++decimalcount > 1)
                 break;
-        }
-        if (!isdigit(*atom))
+        } else if (!isdigit(*atom)) {
             break;
+        }
     }
     /* check if we reached the end */
     return (*atom == '\0') ? 1 : 0;
