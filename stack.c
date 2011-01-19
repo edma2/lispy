@@ -9,19 +9,19 @@ Stack *stack_new(void) {
         return NULL;
 }
 
-int stack_isempty(Stack *s) {
-        return (s == NULL);
+int stack_isempty(Stack **s) {
+        return (*s == NULL);
 }
 
-void *stack_top(Stack *s) {
+void *stack_top(Stack **s) {
         if (stack_isempty(s))
                 return NULL;
-        return s->item;
+        return (*s)->item;
 }
 
-void stack_free(Stack *s) {
+void stack_free(Stack **s) {
         while (!stack_isempty(s))
-                stack_pop(&s);
+                stack_pop(s);
 }
 
 /* Push new item onto stack */
