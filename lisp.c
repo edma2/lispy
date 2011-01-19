@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include "stack.h"
 
 #define ATOMLEN         100
 #define EMPTY_LIST      NULL
@@ -30,35 +31,43 @@ struct Pair {
 
 Object *car(Object *obj);
 Object *cdr(Object *obj);
+void car_set(Object *obj, Object *car);
+void cdr_set(Object *obj, Object *cdr);
 Object *obj_new(void *data, int type);
 Object *number_new(float *f);
 Object *symbol_new(char *symbol);
+Object *emptylist_new(void);
 Object *cons(Object *car, Object *cdr);
 Object *parse(char *buf);
+Stack *gettok(char *buf);
+Object *parsetok(Stack **s);
 void obj_free(Object *obj);
 void obj_print(Object *obj);
+void obj_print_nice(Object *obj);
+int is_num(char *atom);
+int is_digit(char c);
 
-  /*
-   * Mutators
-   *
-   */
+/*
+ * Mutators
+ *
+ */
 
-void set_car(Object *obj, Object *car) {
+void car_set(Object *obj, Object *car) {
         if (obj == NULL)
                 return;
         obj->data->pair->car = car;
 }
 
-void set_cdr(Object *obj, Object *cdr) {
+void cdr_set(Object *obj, Object *cdr) {
         if (obj == NULL)
                 return;
         obj->data->pair->cdr = cdr;
 }
 
-  /*
-   * Accessors
-   *
-   */
+/*
+ * Accessors
+ *
+ */
 
 Object *car(Object *obj) {
         if (obj == NULL)
@@ -76,10 +85,10 @@ Object *cdr(Object *obj) {
         return obj->data->pair->cdr;
 }
 
-  /*
-   * Constructors
-   *
-   */
+/*
+ * Constructors
+ *
+ */
 
 /* Instantiate a new Lisp object, which can be either a PAIR or an ATOM */
 Object *obj_new(void *data, int type) {
@@ -95,7 +104,7 @@ Object *obj_new(void *data, int type) {
         if (data == NULL) {
                 obj->data = EMPTY_LIST;
                 obj->type = TYPE_EMPTY_LIST;
-        /* Any other kind of data will be typed and if necessary, allocated memory */
+                /* Any other kind of data will be typed and if necessary, allocated memory */
         } else {
                 d = malloc(sizeof(Data));
                 if (d == NULL) {
@@ -128,7 +137,11 @@ Object *symbol_new(char *symbol) {
 }
 
 Object *number_new(float *f) {
-        return obj_new(f, TYPE_ATOM_SYMBOL);
+        return obj_new(f, TYPE_ATOM_NUMBER);
+}
+
+Object *emptylist_new(void) {
+        return obj_new(EMPTY_LIST, TYPE_EMPTY_LIST);
 }
 
 /* Returns a new PAIR created by the cons procedure */
@@ -150,10 +163,10 @@ Object *cons(Object *car, Object *cdr) {
         return obj;
 }
 
-  /*
-   * Clean Up
-   *
-   */
+/*
+ * Clean Up
+ *
+ */
 
 void obj_free(Object *obj) {
         if (obj == NULL)
@@ -170,15 +183,16 @@ void obj_free(Object *obj) {
         free(obj);
 }
 
-  /* 
-   * Debugging
-   *
-   */
+/* 
+ * Debugging
+ *
+ */
 
 void obj_print(Object *obj) {
         if (obj == NULL) {
-                fprintf(stderr, "error: missing object\n");
+                fprintf(stderr, "error: missing object");
         } else if (obj->type == TYPE_ATOM_NUMBER) {
+                /* XXX: remove trailing zeroes */
                 fprintf(stderr, "%f", obj->data->number);
         } else if (obj->type == TYPE_ATOM_SYMBOL) {
                 fprintf(stderr, "%s", obj->data->symbol);
@@ -195,162 +209,224 @@ void obj_print(Object *obj) {
         }
 }
 
-/* S-Expression parser - modeled as a finite state machine, returns a PAIR or an ATOM */
-Object *parse(char *buf) {
-        char word[ATOMLEN];
-        int state;
-        int i = 0;
-        int layer = 0;
-        int quoted = -1;
+void obj_print_nice(Object *obj) {
+        obj_print(obj);
+        fprintf(stderr, "\n");
+}
 
-        if (buf == NULL)
-                return NULL;
+/* 
+ * S-Expression parser 
+ *
+ */
 
-        state = STATE_BEGIN;
-        do {
-                switch (state) {
-                        /* Initial state */
-                        case STATE_BEGIN:
-                                if (*buf == '\0') {
-                                        fprintf(stderr, "Missing expression\n");
-                                        state = STATE_ERROR;
-                                } else if (*buf == '(') {
-                                        fprintf(stderr, "Going down a layer\n");
-                                        layer++;
-                                        state = STATE_OPEN;
-                                } else if (*buf == ')') {
-                                        fprintf(stderr, "syntax error: premature closing paren\n");
-                                        state = STATE_ERROR;
-                                } else if (*buf == '\'') {
-                                        /* Append a quotation in front of every ATOM in
-                                         * the list until we reach a closing paren */
-                                        quoted = layer;
-                                /* If we encounter a non-space character, start feeding it
-                                 * into the word buffer */
-                                } else if (*buf != ' ' && *buf != '\n') {
-                                        i = 0;
-                                        if (quoted >= 0)
-                                                word[i++] = '\'';
-                                        word[i++] = *buf;
-                                        state = STATE_ATOM;
-                                }
-                                break;
-                        case STATE_OPEN:
-                                if (*buf == '(') {
-                                        fprintf(stderr, "Going down a layer\n");
-                                        layer++;
-                                } else if (*buf == ')') {
-                                        /* Only valid if input is a quoted empty list */
-                                        if (quoted < 0) {
-                                                fprintf(stderr, "Premature closing paren\n");
-                                                state = STATE_ERROR;
-                                                break;
-                                        }
-                                        layer--;
-                                        /* Check if quoting finished */
-                                        if (layer == quoted)
-                                                quoted = -1;
-                                        fprintf(stderr, "Going up a layer\n");
-                                        state = STATE_CLOSE;
-                                } else if (*buf == '\'') {
-                                        /* Ignore multiple quotations */
-                                        if (quoted < 0)
-                                                quoted = layer;
-                                } else if (*buf != ' ' && *buf != '\n') {
-                                        i = 0;
-                                        /* Append a quote in front of the word */
-                                        if (quoted >= 0)
-                                                word[i++] = '\'';
-                                        word[i++] = *buf;
-                                        state = STATE_ATOM;
-                                }
-                                break;
-                         case STATE_CLOSE:
-                                if (*buf == '(') {
-                                        fprintf(stderr, "Going down a layer\n");
-                                        layer++;
-                                        state = STATE_OPEN;
-                                } else if (*buf == ')') {
-                                        fprintf(stderr, "Going up a layer\n");
-                                        layer--;
-                                        if (layer == quoted)
-                                                quoted = -1;
-                                } else if (*buf == '\'') {
-                                        if (quoted < 0)
-                                                quoted = layer;
-                                } else if (*buf != ' ' && *buf != '\n') {
-                                        i = 0;
-                                        /* Append a quote in front of the word */
-                                        if (quoted >= 0)
-                                                word[i++] = '\'';
-                                        word[i++] = *buf;
-                                        state = STATE_ATOM;
-                                }
-                                break;
-                         /* Being in this state means we are currently feeding ATOMs
-                          * into the list. We transition into this state after we see 
-                          * an open paren a followed by a non-space character. We 
-                          * leave this state when we reach the closeing paren. */
-                         case STATE_ATOM:
-                                if (*buf == '(') {
-                                        if (i != 0) {
-                                                word[i] = '\0';
-                                                i = 0;
-                                                fprintf(stderr, "Adding word %s\n", word);
-                                        }
-                                        fprintf(stderr, "Going down a layer\n");
-                                        layer++;
-                                        state = STATE_OPEN;
-                                } else if (*buf == ')') {
-                                        if (i != 0) {
-                                                word[i] = '\0';
-                                                i = 0;
-                                                fprintf(stderr, "Adding word %s\n", word);
-                                        }
-                                        fprintf(stderr, "Going up a layer\n");
-                                        /* Finished quoting everything between the parens */
-                                        layer--;
-                                        if (layer == quoted);
-                                                quoted = -1;
-                                        state = STATE_CLOSE;
-                                } else if (*buf == '\'') {
-                                        quoted = 1;
-                                } else if (*buf != ' ' && *buf != '\n') {
-                                        if (i == 0 && (quoted >= 0))
-                                                word[i++] = '\'';
-                                        word[i++] = *buf;
-                                } else {
-                                        /* Skip space chars and do not do anything unless
-                                         * buffer is non-empty. If buffer is non-empty then
-                                         * i != 0, flush the buffer. Remain in this state */
-                                        if (i != 0) {
-                                                word[i] = '\0';
-                                                fprintf(stderr, "Adding word %s\n", word);
-                                                i = 0;
-                                        }
-                                }
-                                break;
-                         default:
-                                fprintf(stderr, "Unknown state: %d\n", state);
-                                state = STATE_ERROR;
-                }
-                buf++;
-        } while (state != STATE_ERROR && *buf != '\0');
-
-        if (layer != 0)
-                fprintf(stderr, "lisp: mismatched parens\n");
-        /* Take care of ATOMS */
-        if (state == STATE_ATOM && i != 0) {
-                word[i] = '\0';
-                i = 0;
-                fprintf(stderr, "Adding word %s\n", word);
-        }
-
+Object *parse(char *expr) {
+        /* XXX */
         return NULL;
 }
 
+/* Parse the tokens returned by gettok() */
+Object *parsetok(Stack **s) {
+        Object *obj;
+        Object *expr = NULL;
+        char *tok;
+        float num;
+
+        tok = stack_pop(s);
+        if (tok == NULL)
+                return NULL;
+
+        if (strcmp(tok, ")") == 0) {
+                free(tok);
+                /* begin list processing with
+                 * an empty list */
+                expr = emptylist_new();
+                if (expr == NULL)
+                        return NULL;
+        } else {
+                /* just return an atom */
+                if (is_num(tok)) {
+                        num = atof(tok);
+                        obj = number_new(&num);
+                        free(tok);
+                        return obj;
+                } else {
+                        obj = symbol_new(tok);
+                        free(tok);
+                        return obj;
+                }
+        }
+        /* fetch tokens from stack */
+        while (!stack_isempty(*s)) {
+                tok = stack_pop(s);
+                /* examine token */
+                if (strcmp(tok, ")") == 0) {
+                        /* push it back on the stack
+                         * and perform recursion */
+                        stack_push(s, tok);
+                        obj = parsetok(s);
+                } else if (strcmp(tok, "(") == 0) {
+                        free(tok);
+                        break;
+                } else if (is_num(tok)) {
+                        num = atof(tok);
+                        obj = number_new(&num);
+                        if (obj == NULL)
+                                break;
+                        free(tok);
+                } else {
+                        obj = symbol_new(tok);
+                        free(tok);
+                }
+                expr = cons(obj, expr);
+        }
+
+        return expr;
+}
+
+/* Push all the tokens in to a stack and return it */
+Stack *gettok(char *buf) {
+        Stack *s = stack_new();
+        char atom[ATOMLEN];
+        char *str;
+        int i;
+        int depth = 0;
+        /* track the depth of quotes */
+        Stack *qstack = stack_new();
+        int *qdepth;
+
+        while (*buf != '\0') {
+                if (*buf ==  '(') {
+                        depth++;
+                        buf++;
+                        str = strdup("(");
+                        stack_push(&s, str);
+                        if (stack_top(s) != str) {
+                                if (str != NULL)
+                                        free(str);
+                                break;
+                        }
+                } else if (*buf == ')') {
+                        depth--;
+                        buf++;
+                        str = strdup(")");
+                        stack_push(&s, str);
+                        if (stack_top(s) != str) {
+                                if (str != NULL)
+                                        free(str);
+                                break;
+                        }
+                } else if (*buf == '\'') {
+                        buf++;
+                        str = strdup("(");
+                        stack_push(&s, str);
+                        if (stack_top(s) != str) {
+                                if (str != NULL)
+                                        free(str);
+                                break;
+                        }
+                        str = strdup("quote");
+                        stack_push(&s, str);
+                        if (stack_top(s) != str)
+                                break;
+                        /* push current depth on quote stack */
+                        qdepth = malloc(sizeof(int));
+                        if (qdepth == NULL)
+                                break;
+                        *qdepth = depth;
+                        stack_push(&qstack, qdepth);
+                        if (stack_top(qstack) != qdepth)
+                                break;
+                        /* skip quote stack check */
+                        continue;
+                } else if (*buf != ' ' && *buf != '\n') {
+                        for (i = 0; i < ATOMLEN-1; i++) {
+                                /* stop at whitespace */
+                                if (*buf == '\0' || *buf == ' ' || *buf == '\n')
+                                        break;
+                                /* stop at parens */
+                                if (*buf == '(' || *buf == ')')
+                                        break;
+                                atom[i] = *buf++;
+                        }
+                        atom[i] = '\0';
+                        str = strdup(atom);
+                        stack_push(&s, str);
+                        if (stack_top(s) != str) {
+                                if (str != NULL)
+                                        free(str);
+                                break;
+                        }
+                } else {
+                        /* eat whitespace */
+                        while (*buf == ' ' || *buf == '\n')
+                                buf++;
+                }
+                if (!stack_isempty(qstack)) {
+                        if (depth == *(int *)stack_top(qstack)) {
+                                free(stack_pop(&qstack));
+                                str = strdup(")");
+                                stack_push(&s, str);
+                                if (stack_top(s) != str) {
+                                        if (str != NULL)
+                                                free(str);
+                                        break;
+                                }
+                        }
+                }
+        }
+        /* clean up */
+        if (depth != 0 || !stack_isempty(qstack) || *buf != '\0') {
+                stack_free(s);
+                stack_free(qstack);
+                return NULL;
+        }
+        return s;
+}
+
+int is_digit(char c) {
+        return (c >= '0' && c <= '9');
+}
+
+/* Return non-zero if the string is real number */
+int is_num(char *atom) {
+        int decimalcount = 0;
+
+        if (atom == NULL || *atom == '\0')
+                return 0;
+        /* check sign */
+        if (*atom == '-') {
+                if (*(atom + 1) == '\0')
+                        return 0;
+                atom++;
+        }
+        for (; *atom != '\0'; atom++) {
+                if (*atom == '.') {
+                        if (++decimalcount > 1)
+                                break;
+                } else if (!is_digit(*atom)) {
+                        break;
+                }
+        }
+        /* check if we reached the end */
+        if (*atom == '\0') {
+                /* remove decimal point if 
+                   its a whole number */
+                if (*atom == '.')
+                        *atom = '\0';
+                return 1;
+        } 
+
+        return 0;
+}
+
 int main(void) {
-        parse("'()");
+        Stack *s;
+        Object *obj;
+
+        s = gettok("'(1 2 3)");
+        obj = parsetok(&s);
+        obj_print_nice(obj);
+        obj_free(obj);
 
         return 0;
 }
