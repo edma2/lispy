@@ -15,13 +15,12 @@
 #define cdr(x)          ((x->data.pair)[1])
 #define cons(x, y)      (mkpair(x, y))
 
-/* Typing */
 enum otype { SYM, NUM, PAIR, NIL };
 typedef struct Object Object;
 struct Object {
     union {
         char *symbol;
-        float number; 
+        float number;
         Object *pair[2];
     } data;
     enum otype type;
@@ -49,7 +48,6 @@ int main(void) {
         print(eval(obj = read(stdin), NULL));
         freeobj(obj);
     }
-
     return 0;
 }
 
@@ -121,7 +119,6 @@ Object *mknil(void) {
 
 Object *mkpair(Object *car, Object *cdr) {
     Object *pair[2];
-
     pair[0] = car;
     pair[1] = cdr;
     return mkobj(pair, PAIR);
@@ -268,11 +265,10 @@ Stack *gettoks(char *buf) {
                 break;
             }
             stack_push(&s, str);
-        } else {
-            /* eat whitespace */
-            while (*buf == ' ' || *buf == '\n')
-                buf++;
         }
+        /* eat whitespace */
+        while (*buf == ' ' || *buf == '\n')
+            buf++;
     }
     /* clean up */
     if (*buf != '\0' || depth != 0) {
