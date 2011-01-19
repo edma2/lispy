@@ -5,7 +5,14 @@
 #include <stdio.h>
 #include "stack.h"
 
-#define MAXLEN         100
+#define ATOMLEN          100
+#define READLEN          1000
+#define ISDIGIT(c)      (c >= '0' && c <= '9')
+#define CAR(X)          (X->data.pair->car)
+#define CDR(X)          (X->data.pair->cdr)
+#define SETCAR(X, A)    (CAR(X) = A)
+#define SETCDR(X, A)    (CDR(X) = A)
+#define CONS(X, Y)      (newPair(X, Y))
 
 /* Typing */
 enum otype { SYM, NUM, PAIR, NIL };
@@ -23,71 +30,44 @@ struct Pair {
         Object *cdr;
 };
 
-Object *car(Object *obj);
-Object *cdr(Object *obj);
-Object *cons(Object *car, Object *cdr);
-void setCar(Object *obj, Object *car);
-void setCdr(Object *obj, Object *cdr);
 Object *newObj(void *data, enum otype type);
 Object *newNum(float *f);
 Object *newSym(char *symbol);
+Object *newPair(Object *car, Object *cdr);
 Object *newNil(void);
 Stack *getTokens(char *buf);
 Object *parseTokens(Stack **s);
 void freeObj(Object *obj);
-void printObj(Object *obj);
-void printObj_newline(Object *obj);
+void printObj(Object *obj, int cancelout);
 int isNum(char *atom);
-int isDigit(char c);
+
+Object *read(FILE *f);
+void print(Object *obj);
 
 int main(void) {
-        Stack *s;
         Object *obj;
 
-        s = getTokens("'(1 2 3)");
-        obj = parseTokens(&s);
-        printObj_newline(obj);
-        freeObj(obj);
+        /* (loop (print (eval (read)))) */
+        while (1) {
+                print(obj = read(stdin));
+                /* cleanup */
+                freeObj(obj);
+        }
 
         return 0;
 }
 
-/*
- * Mutators
- *
- */
+Object *read(FILE *f) {
+        char buf[READLEN];
+        Stack *s;
 
-void setCar(Object *obj, Object *car) {
-        if (obj == NULL)
-                return;
-        obj->data.pair->car = car;
-}
-
-void setCdr(Object *obj, Object *cdr) {
-        if (obj == NULL)
-                return;
-        obj->data.pair->cdr = cdr;
-}
-
-/*
- * Accessors
- *
- */
-
-Object *car(Object *obj) {
-        if (obj == NULL)
+        if (fgets(buf, READLEN, f) == NULL)
                 return NULL;
-        if (obj->type != PAIR)
-                return NULL;
-        return obj->data.pair->car;
-}
+        /* remove newline */
+        buf[strlen(buf) - 1] = '\0';
+        s = getTokens(buf);
 
-Object *cdr(Object *obj) {
-        if (obj == NULL)
-                return NULL;
-        if (obj->type != PAIR)
-                return NULL;
-        return obj->data.pair->cdr;
+        return parseTokens(&s);
 }
 
 /*
@@ -132,8 +112,7 @@ Object *newNil(void) {
         return newObj(NULL, NIL);
 }
 
-/* Returns a new PAIR created by the cons procedure */
-Object *cons(Object *car, Object *cdr) {
+Object *newPair(Object *car, Object *cdr) {
         Pair *p;
         Object *obj;
 
@@ -175,7 +154,7 @@ void freeObj(Object *obj) {
  *
  */
 
-void printObj(Object *obj) {
+void printObj(Object *obj, int flag_cancel) {
         if (obj == NULL) {
                 fprintf(stderr, "error: missing object");
         } else if (obj->type == NUM) {
@@ -184,20 +163,30 @@ void printObj(Object *obj) {
         } else if (obj->type == SYM) {
                 fprintf(stderr, "%s", obj->data.symbol);
         } else if (obj->type == PAIR) {
-                fprintf(stderr, "(");
-                printObj(car(obj));
-                fprintf(stderr, " . ");
-                printObj(cdr(obj));
-                fprintf(stderr, ")");
+                if (flag_cancel == 0)
+                        fprintf(stderr, "(");
+                printObj(CAR(obj), 0);
+                /* check next object */
+                if (CDR(obj)->type == SYM || CDR(obj)->type == NUM) {
+                        fprintf(stderr, " . ");
+                        printObj(CDR(obj), 0);
+                        fprintf(stderr, ")");
+                } else {
+                        if (CDR(obj)->type != NIL)
+                                fprintf(stderr, " ");
+                        printObj(CDR(obj), 1);
+                }
         } else if (obj->type == NIL) {
-                fprintf(stderr, "'()");
+                if (flag_cancel == 0)
+                        fprintf(stderr, "(");
+                fprintf(stderr, ")");
         } else {
                 fprintf(stderr, "error: unknown object type\n");
         }
 }
 
-void printObj_newline(Object *obj) {
-        printObj(obj);
+void print(Object *obj) {
+        printObj(obj, 0);
         fprintf(stderr, "\n");
 }
 
@@ -259,7 +248,7 @@ Object *parseTokens(Stack **s) {
                         obj = newSym(tok);
                         free(tok);
                 }
-                expr = cons(obj, expr);
+                expr = CONS(obj, expr);
         }
 
         return expr;
@@ -269,7 +258,7 @@ Object *parseTokens(Stack **s) {
  * XXX: write this a bit more elegantly */
 Stack *getTokens(char *buf) {
         Stack *s = stack_new();
-        char atom[MAXLEN];
+        char atom[ATOMLEN];
         char *str;
         int i;
         int depth = 0;
@@ -322,7 +311,7 @@ Stack *getTokens(char *buf) {
                         /* skip quote stack check */
                         continue;
                 } else if (*buf != ' ' && *buf != '\n') {
-                        for (i = 0; i < MAXLEN-1; i++) {
+                        for (i = 0; i < ATOMLEN-1; i++) {
                                 /* stop at whitespace */
                                 if (*buf == '\0' || *buf == ' ' || *buf == '\n')
                                         break;
@@ -366,10 +355,6 @@ Stack *getTokens(char *buf) {
         return s;
 }
 
-int isDigit(char c) {
-        return (c >= '0' && c <= '9');
-}
-
 /* Return non-zero if the string is real number */
 int isNum(char *atom) {
         int decimalcount = 0;
@@ -386,7 +371,7 @@ int isNum(char *atom) {
                 if (*atom == '.') {
                         if (++decimalcount > 1)
                                 break;
-                } else if (!isDigit(*atom)) {
+                } else if (!ISDIGIT(*atom)) {
                         break;
                 }
         }
