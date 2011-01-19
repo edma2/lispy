@@ -33,7 +33,7 @@ struct Pair {
 };
 
 Object *newObj(void *data, enum otype type);
-Object *newNum(float *f);
+Object *newNum(float f);
 Object *newSym(char *symbol);
 Object *newPair(Object *car, Object *cdr);
 Object *newNil(void);
@@ -50,14 +50,11 @@ void print(Object *obj);
 int main(void) {
         Object *obj;
 
-        print(obj = read(stdin));
-
-        /* (loop (print (eval (read))))
+        /* (loop (print (eval (read) global))) */
         while (1) {
-                print(obj = read(stdin));
+                print(eval(obj = read(stdin), NULL));
                 freeObj(obj);
         }
-        */
 
         return 0;
 }
@@ -73,6 +70,15 @@ Object *read(FILE *f) {
         s = getTokens(buf);
 
         return parseTokens(&s);
+}
+
+Object *eval(Object *obj, Object *env) {
+        return obj;
+}
+
+void print(Object *obj) {
+        printObj(obj, 0);
+        fprintf(stderr, "\n");
 }
 
 /*
@@ -109,8 +115,8 @@ Object *newSym(char *symbol) {
         return newObj(symbol, SYM);
 }
 
-Object *newNum(float *f) {
-        return newObj(f, NUM);
+Object *newNum(float f) {
+        return newObj(&f, NUM);
 }
 
 Object *newNil(void) {
@@ -190,11 +196,6 @@ void printObj(Object *obj, int flag_cancel) {
         }
 }
 
-void print(Object *obj) {
-        printObj(obj, 0);
-        fprintf(stderr, "\n");
-}
-
 /* 
  * S-Expression parser 
  *
@@ -202,10 +203,8 @@ void print(Object *obj) {
 
 /* Parse the tokens returned by getTokens() */
 Object *parseTokens(Stack **s) {
-        Object *obj;
-        Object *expr = NULL;
+        Object *obj, *expr = NULL;
         char *tok;
-        float num;
 
         /* fetch tokens from stack */
         while (!stack_isempty(*s)) {
@@ -220,29 +219,12 @@ Object *parseTokens(Stack **s) {
                                 /* put it back on the stack and recurse */
                                 stack_push(s, tok);
                                 obj = parseTokens(s);
-                                /* check the top for quote */
-                                while (!stack_isempty(*s) && strcmp((char *)stack_top(*s), "\'") == 0) {
-                                        /* pop it off */
-                                        free(stack_pop(s));
-                                        obj = CONS(newSym("quote"), CONS(obj, newNil()));
-                                }
                         }
                 } else if (strcmp(tok, "(") == 0) {
                         free(tok);
                         break;
-                } else if (isNum(tok)) {
-                        num = atof(tok);
-                        free(tok);
-                        obj = newNum(&num);
-                        if (obj == NULL)
-                                break;
-                        /* number atom */
-                        if (expr == NULL) {
-                                expr = obj;
-                                break;
-                        }
                 } else if (strcmp(tok, "\'") != 0) {
-                        obj = newSym(tok);
+                        obj = isNum(tok) ? newNum(atof(tok)) : newSym(tok);
                         free(tok);
                         if (obj == NULL)
                                 break;
@@ -252,10 +234,15 @@ Object *parseTokens(Stack **s) {
                                 break;
                         }
                 }
+                /* check the top for quote */
+                while (!stack_isempty(*s) && strcmp((char *)stack_top(*s), "\'") == 0) {
+                        /* pop it off */
+                        free(stack_pop(s));
+                        obj = CONS(newSym("quote"), CONS(obj, newNil()));
+                }
                 expr = CONS(obj, expr);
         }
         while (!stack_isempty(*s) && strcmp((char *)stack_top(*s), "\'") == 0) {
-                /* pop it off */
                 free(stack_pop(s));
                 expr = CONS(newSym("quote"), CONS(expr, newNil()));
         }
