@@ -1,6 +1,7 @@
 /* lisp.c - minimal lisp interpreter 
  * author: Eugene Ma (edma2)
  * TODO: environments, lambda procs, numerical tower?
+ * pair == 2 item array?
  */
 #include <stdlib.h>
 #include <string.h>
@@ -9,45 +10,36 @@
 
 #define ATOMLEN         100
 #define READLEN         1000
-
 #define isdigit(c)      (c >= '0' && c <= '9')
-
-#define car(x)          (x->data.pair->car)
-#define cdr(x)          (x->data.pair->cdr)
-#define setcar(x, a)    (car(x) = a)
-#define setcdr(x, a)    (cdr(x) = a)
-#define cons(x, y)      (newPair(x, y))
+#define car(x)          ((x->data.pair)[0])
+#define cdr(x)          ((x->data.pair)[1])
+#define cons(x, y)      (mkpair(x, y))
 
 /* Typing */
 enum otype { SYM, NUM, PAIR, NIL };
-typedef struct Pair Pair;
-typedef struct {
+typedef struct Object Object;
+struct Object {
     union {
         char *symbol;
         float number; 
-        Pair *pair;
+        Object *pair[2];
     } data;
     enum otype type;
-} Object;
-struct Pair {
-    Object *car;
-    Object *cdr;
 };
-
-Object *newObj(void *data, enum otype type);
-Object *newNum(float f);
-Object *newSym(char *symbol);
-Object *newPair(Object *car, Object *cdr);
-Object *newNil(void);
-Stack *getTokens(char *buf);
-Object *parseTokens(Stack **s);
-void freeObj(Object *obj);
-void printObj(Object *obj, int cancelout);
-int isNum(char *atom);
 
 Object *read(FILE *f);
 Object *eval(Object *obj, Object *env); //todo
 void print(Object *obj);
+Object *mkobj(void *data, enum otype type);
+Object *mknum(float f);
+Object *mksym(char *symbol);
+Object *mkpair(Object *car, Object *cdr);
+Object *mknil(void);
+Stack *gettoks(char *buf);
+Object *parsetoks(Stack **s);
+void freeobj(Object *obj);
+void printobj(Object *obj, int cancelout);
+int isnum(char *atom);
 
 int main(void) {
     Object *obj;
@@ -55,7 +47,7 @@ int main(void) {
     /* (loop (print (eval (read) global))) */
     while (1) {
         print(eval(obj = read(stdin), NULL));
-        freeObj(obj);
+        freeobj(obj);
     }
 
     return 0;
@@ -70,10 +62,10 @@ Object *read(FILE *f) {
         return NULL;
     /* remove newline */
     buf[strlen(buf) - 1] = '\0';
-    s = getTokens(buf);
+    s = gettoks(buf);
     if (s == NULL)
         fprintf(stderr, "read: mismatched parens\n");
-    return parseTokens(&s);
+    return parsetoks(&s);
 }
 
 Object *eval(Object *obj, Object *env) {
@@ -81,7 +73,7 @@ Object *eval(Object *obj, Object *env) {
 }
 
 void print(Object *obj) {
-    printObj(obj, 0);
+    printobj(obj, 0);
     fprintf(stderr, "\n");
 }
 
@@ -90,7 +82,7 @@ void print(Object *obj) {
  *
  */
 
-Object *newObj(void *data, enum otype type) {
+Object *mkobj(void *data, enum otype type) {
     Object *obj;
 
     obj = malloc(sizeof(Object));
@@ -107,40 +99,32 @@ Object *newObj(void *data, enum otype type) {
     } else if (type == NUM) {
         obj->data.number = *(float *)data; 
     } else if (type == PAIR) {
-        obj->data.pair = (Pair *)data;
+        car(obj) = ((Object **)data)[0];
+        cdr(obj) = ((Object **)data)[1];
     } 
     /* if type is NIL, only assign the object a type */
     obj->type = type;
     return obj;
 }
 
-Object *newSym(char *symbol) {
-    return newObj(symbol, SYM);
+Object *mksym(char *symbol) {
+    return mkobj(symbol, SYM);
 }
 
-Object *newNum(float f) {
-    return newObj(&f, NUM);
+Object *mknum(float f) {
+    return mkobj(&f, NUM);
 }
 
-Object *newNil(void) {
-    return newObj(NULL, NIL);
+Object *mknil(void) {
+    return mkobj(NULL, NIL);
 }
 
-Object *newPair(Object *car, Object *cdr) {
-    Pair *p;
-    Object *obj;
+Object *mkpair(Object *car, Object *cdr) {
+    Object *pair[2];
 
-    p = malloc(sizeof(Pair));
-    if (p == NULL)
-        return NULL;
-    p->car = car;
-    p->cdr = cdr;
-    obj = newObj(p, PAIR);
-    if (obj == NULL) {
-        free(p);
-        return NULL;
-    }
-    return obj;
+    pair[0] = car;
+    pair[1] = cdr;
+    return mkobj(pair, PAIR);
 }
 
 /*
@@ -148,16 +132,15 @@ Object *newPair(Object *car, Object *cdr) {
  *
  */
 
-void freeObj(Object *obj) {
+void freeobj(Object *obj) {
     if (obj == NULL)
         return;
     if (obj->type == SYM) {
         free(obj->data.symbol);
     } else if (obj->type == PAIR) {
         /* Recursively free the pair */
-        freeObj(obj->data.pair->car);
-        freeObj(obj->data.pair->cdr);
-        free(obj->data.pair);
+        freeobj(car(obj));
+        freeobj(cdr(obj));
     }
     free(obj);
 }
@@ -167,7 +150,7 @@ void freeObj(Object *obj) {
  *
  */
 
-void printObj(Object *obj, int flag_cancel) {
+void printobj(Object *obj, int flag_cancel) {
     if (obj == NULL) {
         fprintf(stderr, "print: missing object");
     } else if (obj->type == NUM) {
@@ -178,16 +161,16 @@ void printObj(Object *obj, int flag_cancel) {
     } else if (obj->type == PAIR) {
         if (flag_cancel == 0)
             fprintf(stderr, "(");
-        printObj(car(obj), 0);
+        printobj(car(obj), 0);
         /* check next object */
         if (cdr(obj)->type == SYM || cdr(obj)->type == NUM) {
             fprintf(stderr, " . ");
-            printObj(cdr(obj), 0);
+            printobj(cdr(obj), 0);
             fprintf(stderr, ")");
         } else {
             if (cdr(obj)->type != NIL)
                 fprintf(stderr, " ");
-            printObj(cdr(obj), 1);
+            printobj(cdr(obj), 1);
         }
     } else if (obj->type == NIL) {
         if (flag_cancel == 0)
@@ -203,8 +186,8 @@ void printObj(Object *obj, int flag_cancel) {
  *
  */
 
-/* Parse the tokens returned by getTokens() */
-Object *parseTokens(Stack **s) {
+/* Parse the tokens returned by gettoks() */
+Object *parsetoks(Stack **s) {
     Object *obj, *expr = NULL;
     char *tok;
 
@@ -215,18 +198,18 @@ Object *parseTokens(Stack **s) {
         if (strcmp(tok, ")") == 0) {
             if (expr == NULL) {
                 free(tok);
-                expr = newNil();
+                expr = mknil();
                 continue;
             } else {
                 /* put it back on the stack and recurse */
                 stack_push(s, tok);
-                obj = parseTokens(s);
+                obj = parsetoks(s);
             }
         } else if (strcmp(tok, "(") == 0) {
             free(tok);
             break;
         } else if (strcmp(tok, "\'") != 0) {
-            obj = isNum(tok) ? newNum(atof(tok)) : newSym(tok);
+            obj = isnum(tok) ? mknum(atof(tok)) : mksym(tok);
             free(tok);
             if (obj == NULL)
                 break;
@@ -240,19 +223,19 @@ Object *parseTokens(Stack **s) {
         while (!stack_isempty(s) && strcmp((char *)stack_top(s), "\'") == 0) {
             /* pop it off */
             free(stack_pop(s));
-            obj = cons(newSym("quote"), cons(obj, newNil()));
+            obj = cons(mksym("quote"), cons(obj, mknil()));
         }
         expr = cons(obj, expr);
     }
     while (!stack_isempty(s) && strcmp((char *)stack_top(s), "\'") == 0) {
         free(stack_pop(s));
-        expr = cons(newSym("quote"), cons(expr, newNil()));
+        expr = cons(mksym("quote"), cons(expr, mknil()));
     }
     return expr;
 }
 
 /* Push all the tokens in to a stack and return it */
-Stack *getTokens(char *buf) {
+Stack *gettoks(char *buf) {
     Stack *s = stack_new();
     char atom[ATOMLEN];
     char *str;
@@ -301,7 +284,7 @@ Stack *getTokens(char *buf) {
 }
 
 /* Return non-zero if the string is real number */
-int isNum(char *atom) {
+int isnum(char *atom) {
     int decimalcount = 0;
 
     if (*atom == '-')
