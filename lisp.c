@@ -50,12 +50,14 @@ void print(Object *obj);
 int main(void) {
         Object *obj;
 
-        /* (loop (print (eval (read)))) */
+        print(obj = read(stdin));
+
+        /* (loop (print (eval (read))))
         while (1) {
                 print(obj = read(stdin));
-                /* cleanup */
                 freeObj(obj);
         }
+        */
 
         return 0;
 }
@@ -205,114 +207,82 @@ Object *parseTokens(Stack **s) {
         char *tok;
         float num;
 
-        tok = stack_pop(s);
-        if (tok == NULL)
-                return NULL;
-
-        if (strcmp(tok, ")") == 0) {
-                free(tok);
-                /* begin list processing with
-                 * an empty list */
-                expr = newNil();
-                if (expr == NULL)
-                        return NULL;
-        } else {
-                /* just return an atom */
-                if (isNum(tok)) {
-                        num = atof(tok);
-                        obj = newNum(&num);
-                        free(tok);
-                        return obj;
-                } else {
-                        obj = newSym(tok);
-                        free(tok);
-                        return obj;
-                }
-        }
         /* fetch tokens from stack */
         while (!stack_isempty(*s)) {
                 tok = stack_pop(s);
                 /* examine token */
                 if (strcmp(tok, ")") == 0) {
-                        /* push it back on the stack
-                         * and perform recursion */
-                        stack_push(s, tok);
-                        obj = parseTokens(s);
+                        if (expr == NULL) {
+                                free(tok);
+                                expr = newNil();
+                                continue;
+                        } else {
+                                /* put it back on the stack and recurse */
+                                stack_push(s, tok);
+                                obj = parseTokens(s);
+                                /* check the top for quote */
+                                while (!stack_isempty(*s) && strcmp((char *)stack_top(*s), "\'") == 0) {
+                                        /* pop it off */
+                                        free(stack_pop(s));
+                                        obj = CONS(newSym("quote"), CONS(obj, newNil()));
+                                }
+                        }
                 } else if (strcmp(tok, "(") == 0) {
                         free(tok);
                         break;
                 } else if (isNum(tok)) {
                         num = atof(tok);
+                        free(tok);
                         obj = newNum(&num);
                         if (obj == NULL)
                                 break;
-                        free(tok);
-                } else {
+                        /* number atom */
+                        if (expr == NULL) {
+                                expr = obj;
+                                break;
+                        }
+                } else if (strcmp(tok, "\'") != 0) {
                         obj = newSym(tok);
                         free(tok);
+                        if (obj == NULL)
+                                break;
+                        /* symbol atom */
+                        if (expr == NULL) {
+                                expr = obj;
+                                break;
+                        }
                 }
                 expr = CONS(obj, expr);
+        }
+        while (!stack_isempty(*s) && strcmp((char *)stack_top(*s), "\'") == 0) {
+                /* pop it off */
+                free(stack_pop(s));
+                expr = CONS(newSym("quote"), CONS(expr, newNil()));
         }
 
         return expr;
 }
 
-/* Push all the tokens in to a stack and return it 
- * XXX: write this a bit more elegantly */
+/* Push all the tokens in to a stack and return it */
 Stack *getTokens(char *buf) {
         Stack *s = stack_new();
         char atom[ATOMLEN];
         char *str;
         int i;
-        int depth = 0;
-        /* track the depth of quotes */
-        Stack *qstack = stack_new();
-        int *qdepth;
 
         while (*buf != '\0') {
                 if (*buf ==  '(') {
-                        depth++;
-                        buf++;
                         str = strdup("(");
                         stack_push(&s, str);
-                        if (stack_top(s) != str) {
-                                if (str != NULL)
-                                        free(str);
-                                break;
-                        }
-                } else if (*buf == ')') {
-                        depth--;
                         buf++;
+                } else if (*buf == ')') {
                         str = strdup(")");
                         stack_push(&s, str);
-                        if (stack_top(s) != str) {
-                                if (str != NULL)
-                                        free(str);
-                                break;
-                        }
-                } else if (*buf == '\'') {
                         buf++;
-                        str = strdup("(");
+                } else if (*buf == '\'') {
+                        str = strdup("\'");
                         stack_push(&s, str);
-                        if (stack_top(s) != str) {
-                                if (str != NULL)
-                                        free(str);
-                                break;
-                        }
-                        str = strdup("quote");
-                        stack_push(&s, str);
-                        if (stack_top(s) != str)
-                                break;
-                        /* push current depth on quote stack */
-                        qdepth = malloc(sizeof(int));
-                        if (qdepth == NULL)
-                                break;
-                        *qdepth = depth;
-                        stack_push(&qstack, qdepth);
-                        if (stack_top(qstack) != qdepth)
-                                break;
-                        /* skip quote stack check */
-                        continue;
+                        buf++;
                 } else if (*buf != ' ' && *buf != '\n') {
                         for (i = 0; i < ATOMLEN-1; i++) {
                                 /* stop at whitespace */
@@ -326,33 +296,15 @@ Stack *getTokens(char *buf) {
                         atom[i] = '\0';
                         str = strdup(atom);
                         stack_push(&s, str);
-                        if (stack_top(s) != str) {
-                                if (str != NULL)
-                                        free(str);
-                                break;
-                        }
                 } else {
                         /* eat whitespace */
                         while (*buf == ' ' || *buf == '\n')
                                 buf++;
                 }
-                if (!stack_isempty(qstack)) {
-                        if (depth == *(int *)stack_top(qstack)) {
-                                free(stack_pop(&qstack));
-                                str = strdup(")");
-                                stack_push(&s, str);
-                                if (stack_top(s) != str) {
-                                        if (str != NULL)
-                                                free(str);
-                                        break;
-                                }
-                        }
-                }
         }
         /* clean up */
-        if (depth != 0 || !stack_isempty(qstack) || *buf != '\0') {
+        if (*buf != '\0') {
                 stack_free(s);
-                stack_free(qstack);
                 return NULL;
         }
         return s;
