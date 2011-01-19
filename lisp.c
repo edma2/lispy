@@ -5,25 +5,19 @@
 #include <stdio.h>
 #include "stack.h"
 
-#define ATOMLEN         100
-#define EMPTY_LIST      NULL
+#define MAXLEN         100
 
 /* Typing */
-enum { TYPE_ATOM_SYMBOL, TYPE_ATOM_NUMBER, TYPE_PAIR, TYPE_EMPTY_LIST };
-enum { STATE_BEGIN, STATE_OPEN, STATE_CLOSE, STATE_ATOM, STATE_ERROR };
-
+enum otype { SYM, NUM, PAIR, NIL };
 typedef struct Pair Pair;
-typedef union {
-        char *symbol;
-        float number;   /* Store numbers as floats for speed benefit */
-        Pair *pair;
-} Data;
-
 typedef struct {
-        Data *data;
-        int type;       /* See type enumeration */
+        union {
+                char *symbol;
+                float number; 
+                Pair *pair;
+        } data;
+        enum otype type;
 } Object;
-
 struct Pair {
         Object *car;
         Object *cdr;
@@ -31,37 +25,48 @@ struct Pair {
 
 Object *car(Object *obj);
 Object *cdr(Object *obj);
-void car_set(Object *obj, Object *car);
-void cdr_set(Object *obj, Object *cdr);
-Object *obj_new(void *data, int type);
-Object *number_new(float *f);
-Object *symbol_new(char *symbol);
-Object *emptylist_new(void);
 Object *cons(Object *car, Object *cdr);
-Object *parse(char *buf);
-Stack *gettok(char *buf);
-Object *parsetok(Stack **s);
-void obj_free(Object *obj);
-void obj_print(Object *obj);
-void obj_print_nice(Object *obj);
-int is_num(char *atom);
-int is_digit(char c);
+void setCar(Object *obj, Object *car);
+void setCdr(Object *obj, Object *cdr);
+Object *newObj(void *data, enum otype type);
+Object *newNum(float *f);
+Object *newSym(char *symbol);
+Object *newNil(void);
+Stack *getTokens(char *buf);
+Object *parseTokens(Stack **s);
+void freeObj(Object *obj);
+void printObj(Object *obj);
+void printObj_newline(Object *obj);
+int isNum(char *atom);
+int isDigit(char c);
+
+int main(void) {
+        Stack *s;
+        Object *obj;
+
+        s = getTokens("'(1 2 3)");
+        obj = parseTokens(&s);
+        printObj_newline(obj);
+        freeObj(obj);
+
+        return 0;
+}
 
 /*
  * Mutators
  *
  */
 
-void car_set(Object *obj, Object *car) {
+void setCar(Object *obj, Object *car) {
         if (obj == NULL)
                 return;
-        obj->data->pair->car = car;
+        obj->data.pair->car = car;
 }
 
-void cdr_set(Object *obj, Object *cdr) {
+void setCdr(Object *obj, Object *cdr) {
         if (obj == NULL)
                 return;
-        obj->data->pair->cdr = cdr;
+        obj->data.pair->cdr = cdr;
 }
 
 /*
@@ -72,17 +77,17 @@ void cdr_set(Object *obj, Object *cdr) {
 Object *car(Object *obj) {
         if (obj == NULL)
                 return NULL;
-        if (obj->type != TYPE_PAIR)
+        if (obj->type != PAIR)
                 return NULL;
-        return obj->data->pair->car;
+        return obj->data.pair->car;
 }
 
 Object *cdr(Object *obj) {
         if (obj == NULL)
                 return NULL;
-        if (obj->type != TYPE_PAIR)
+        if (obj->type != PAIR)
                 return NULL;
-        return obj->data->pair->cdr;
+        return obj->data.pair->cdr;
 }
 
 /*
@@ -90,58 +95,41 @@ Object *cdr(Object *obj) {
  *
  */
 
-/* Instantiate a new Lisp object, which can be either a PAIR or an ATOM */
-Object *obj_new(void *data, int type) {
+Object *newObj(void *data, enum otype type) {
         Object *obj;
-        Data *d;
 
         obj = malloc(sizeof(Object));
-        if (obj == NULL) {
+        if (obj == NULL)
                 return NULL;
-        }
 
-        /* An empty list is represented as a NULL pointer to object's data */
-        if (data == NULL) {
-                obj->data = EMPTY_LIST;
-                obj->type = TYPE_EMPTY_LIST;
-                /* Any other kind of data will be typed and if necessary, allocated memory */
-        } else {
-                d = malloc(sizeof(Data));
-                if (d == NULL) {
+        if (type == SYM) {
+                obj->data.symbol = strdup((char *)data);
+                /* Check that strdup succeeded */
+                if (obj->data.symbol == NULL) {
                         free(obj);
                         return NULL;
                 }
-                if (type == TYPE_ATOM_SYMBOL) {
-                        /* Free symbol string when we are done with the object */
-                        d->symbol = strdup((char *)data);
-                        /* Check that strcup succeeded */
-                        if (d->symbol == NULL) {
-                                free(d);
-                                free(obj);
-                                return NULL;
-                        }
-                } else if (type == TYPE_ATOM_NUMBER) {
-                        d->number = *(float *)data; 
-                } else if (type == TYPE_PAIR) {
-                        d->pair = (Pair *)data;
-                }
-                obj->data = d;
-                obj->type = type;
-        }
+        } else if (type == NUM) {
+                obj->data.number = *(float *)data; 
+        } else if (type == PAIR) {
+                obj->data.pair = (Pair *)data;
+        } 
+        /* if type is NIL, only assign the object a type */
+        obj->type = type;
 
         return obj;
 }
 
-Object *symbol_new(char *symbol) {
-        return obj_new(symbol, TYPE_ATOM_SYMBOL);
+Object *newSym(char *symbol) {
+        return newObj(symbol, SYM);
 }
 
-Object *number_new(float *f) {
-        return obj_new(f, TYPE_ATOM_NUMBER);
+Object *newNum(float *f) {
+        return newObj(f, NUM);
 }
 
-Object *emptylist_new(void) {
-        return obj_new(EMPTY_LIST, TYPE_EMPTY_LIST);
+Object *newNil(void) {
+        return newObj(NULL, NIL);
 }
 
 /* Returns a new PAIR created by the cons procedure */
@@ -154,7 +142,7 @@ Object *cons(Object *car, Object *cdr) {
                 return NULL;
         p->car = car;
         p->cdr = cdr;
-        obj = obj_new(p, TYPE_PAIR);
+        obj = newObj(p, PAIR);
         if (obj == NULL) {
                 free(p);
                 return NULL;
@@ -168,18 +156,17 @@ Object *cons(Object *car, Object *cdr) {
  *
  */
 
-void obj_free(Object *obj) {
+void freeObj(Object *obj) {
         if (obj == NULL)
                 return;
-        if (obj->type == TYPE_ATOM_SYMBOL) {
-                free(obj->data->symbol);
-        } else if (obj->type == TYPE_PAIR) {
+        if (obj->type == SYM) {
+                free(obj->data.symbol);
+        } else if (obj->type == PAIR) {
                 /* Recursively free the pair */
-                obj_free(obj->data->pair->car);
-                obj_free(obj->data->pair->cdr);
-                free(obj->data->pair);
+                freeObj(obj->data.pair->car);
+                freeObj(obj->data.pair->cdr);
+                free(obj->data.pair);
         }
-        free(obj->data);
         free(obj);
 }
 
@@ -188,29 +175,29 @@ void obj_free(Object *obj) {
  *
  */
 
-void obj_print(Object *obj) {
+void printObj(Object *obj) {
         if (obj == NULL) {
                 fprintf(stderr, "error: missing object");
-        } else if (obj->type == TYPE_ATOM_NUMBER) {
+        } else if (obj->type == NUM) {
                 /* XXX: remove trailing zeroes */
-                fprintf(stderr, "%f", obj->data->number);
-        } else if (obj->type == TYPE_ATOM_SYMBOL) {
-                fprintf(stderr, "%s", obj->data->symbol);
-        } else if (obj->type == TYPE_PAIR) {
+                fprintf(stderr, "%f", obj->data.number);
+        } else if (obj->type == SYM) {
+                fprintf(stderr, "%s", obj->data.symbol);
+        } else if (obj->type == PAIR) {
                 fprintf(stderr, "(");
-                obj_print(car(obj));
+                printObj(car(obj));
                 fprintf(stderr, " . ");
-                obj_print(cdr(obj));
+                printObj(cdr(obj));
                 fprintf(stderr, ")");
-        } else if (obj->type == TYPE_EMPTY_LIST) {
+        } else if (obj->type == NIL) {
                 fprintf(stderr, "'()");
         } else {
                 fprintf(stderr, "error: unknown object type\n");
         }
 }
 
-void obj_print_nice(Object *obj) {
-        obj_print(obj);
+void printObj_newline(Object *obj) {
+        printObj(obj);
         fprintf(stderr, "\n");
 }
 
@@ -219,13 +206,8 @@ void obj_print_nice(Object *obj) {
  *
  */
 
-Object *parse(char *expr) {
-        /* XXX */
-        return NULL;
-}
-
-/* Parse the tokens returned by gettok() */
-Object *parsetok(Stack **s) {
+/* Parse the tokens returned by getTokens() */
+Object *parseTokens(Stack **s) {
         Object *obj;
         Object *expr = NULL;
         char *tok;
@@ -239,18 +221,18 @@ Object *parsetok(Stack **s) {
                 free(tok);
                 /* begin list processing with
                  * an empty list */
-                expr = emptylist_new();
+                expr = newNil();
                 if (expr == NULL)
                         return NULL;
         } else {
                 /* just return an atom */
-                if (is_num(tok)) {
+                if (isNum(tok)) {
                         num = atof(tok);
-                        obj = number_new(&num);
+                        obj = newNum(&num);
                         free(tok);
                         return obj;
                 } else {
-                        obj = symbol_new(tok);
+                        obj = newSym(tok);
                         free(tok);
                         return obj;
                 }
@@ -263,18 +245,18 @@ Object *parsetok(Stack **s) {
                         /* push it back on the stack
                          * and perform recursion */
                         stack_push(s, tok);
-                        obj = parsetok(s);
+                        obj = parseTokens(s);
                 } else if (strcmp(tok, "(") == 0) {
                         free(tok);
                         break;
-                } else if (is_num(tok)) {
+                } else if (isNum(tok)) {
                         num = atof(tok);
-                        obj = number_new(&num);
+                        obj = newNum(&num);
                         if (obj == NULL)
                                 break;
                         free(tok);
                 } else {
-                        obj = symbol_new(tok);
+                        obj = newSym(tok);
                         free(tok);
                 }
                 expr = cons(obj, expr);
@@ -283,10 +265,11 @@ Object *parsetok(Stack **s) {
         return expr;
 }
 
-/* Push all the tokens in to a stack and return it */
-Stack *gettok(char *buf) {
+/* Push all the tokens in to a stack and return it 
+ * XXX: write this a bit more elegantly */
+Stack *getTokens(char *buf) {
         Stack *s = stack_new();
-        char atom[ATOMLEN];
+        char atom[MAXLEN];
         char *str;
         int i;
         int depth = 0;
@@ -339,7 +322,7 @@ Stack *gettok(char *buf) {
                         /* skip quote stack check */
                         continue;
                 } else if (*buf != ' ' && *buf != '\n') {
-                        for (i = 0; i < ATOMLEN-1; i++) {
+                        for (i = 0; i < MAXLEN-1; i++) {
                                 /* stop at whitespace */
                                 if (*buf == '\0' || *buf == ' ' || *buf == '\n')
                                         break;
@@ -383,12 +366,12 @@ Stack *gettok(char *buf) {
         return s;
 }
 
-int is_digit(char c) {
+int isDigit(char c) {
         return (c >= '0' && c <= '9');
 }
 
 /* Return non-zero if the string is real number */
-int is_num(char *atom) {
+int isNum(char *atom) {
         int decimalcount = 0;
 
         if (atom == NULL || *atom == '\0')
@@ -403,7 +386,7 @@ int is_num(char *atom) {
                 if (*atom == '.') {
                         if (++decimalcount > 1)
                                 break;
-                } else if (!is_digit(*atom)) {
+                } else if (!isDigit(*atom)) {
                         break;
                 }
         }
@@ -415,18 +398,6 @@ int is_num(char *atom) {
                         *atom = '\0';
                 return 1;
         } 
-
-        return 0;
-}
-
-int main(void) {
-        Stack *s;
-        Object *obj;
-
-        s = gettok("'(1 2 3)");
-        obj = parsetok(&s);
-        obj_print_nice(obj);
-        obj_free(obj);
 
         return 0;
 }
