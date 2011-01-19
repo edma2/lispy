@@ -1,12 +1,14 @@
 /* lisp.c - minimal lisp interpreter 
- * author: Eugene Ma (edma2) */
+ * author: Eugene Ma (edma2)
+ * TODO: environments, lambda procs
+ */
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include "stack.h"
 
-#define ATOMLEN          100
-#define READLEN          1000
+#define ATOMLEN         100
+#define READLEN         1000
 #define ISDIGIT(c)      (c >= '0' && c <= '9')
 #define CAR(X)          (X->data.pair->car)
 #define CDR(X)          (X->data.pair->cdr)
@@ -42,6 +44,7 @@ void printObj(Object *obj, int cancelout);
 int isNum(char *atom);
 
 Object *read(FILE *f);
+Object *eval(Object *obj, Object *env); //todo
 void print(Object *obj);
 
 int main(void) {
