@@ -8,8 +8,8 @@
 #include <stdio.h>
 #include "stack.h"
 
-#define ATOMLEN         100
-#define READLEN         1000
+#define MAXATOM         100
+#define MAXLINE         1000
 #define isdigit(c)      (c >= '0' && c <= '9')
 #define car(x)          ((x->data.pair)[0])
 #define cdr(x)          ((x->data.pair)[1])
@@ -26,7 +26,7 @@ struct Object {
     enum otype type;
 };
 
-Object *read(FILE *f);
+Object *read(FILE *fp);
 Object *eval(Object *obj, Object *env); //todo
 void print(Object *obj);
 Object *mkobj(void *data, enum otype type);
@@ -34,11 +34,13 @@ Object *mknum(float f);
 Object *mksym(char *symbol);
 Object *mkpair(Object *car, Object *cdr);
 Object *mknil(void);
-Stack *gettoks(char *buf);
+Stack *gettoks(FILE *fp);
 Object *parsetoks(Stack **s);
 void freeobj(Object *obj);
 void printobj(Object *obj, int cancelout);
 int isnum(char *atom);
+Object *mkvar(Object *key, Object *val);
+void bindvar(Object **frame, Object *sym, Object *val);
 
 int main(void) {
     Object *obj;
@@ -51,18 +53,43 @@ int main(void) {
     return 0;
 }
 
-Object *read(FILE *f) {
-    char buf[READLEN];
+/*
+ * Environments 
+ *
+ */
+/* XXX: setup the environment here */
+
+Object *mkvar(Object *key, Object *val) {
+    if (key->type != SYM)
+        return NULL;
+    return cons(key, val);
+}
+
+/* Bind a variable to the frame */
+void bindvar(Object **frame, Object *sym, Object *val) {
+    Object *bind;
+
+    bind = mkvar(sym, val);
+    if (bind == NULL)
+        return;
+    *frame = cons(bind, *frame);
+}
+
+Object *assoc(Object *key, Object *alist) {
+    return NULL;
+}
+
+/*
+ * Core
+ *
+ */
+
+Object *read(FILE *fp) {
     Stack *s;
 
     printf("> ");
-    if (fgets(buf, READLEN, f) == NULL)
-        return NULL;
-    /* remove newline */
-    buf[strlen(buf) - 1] = '\0';
-    s = gettoks(buf);
-    if (s == NULL)
-        fprintf(stderr, "read: mismatched parens\n");
+    s = gettoks(fp);
+
     return parsetoks(&s);
 }
 
@@ -205,7 +232,7 @@ Object *parsetoks(Stack **s) {
         } else if (strcmp(tok, "(") == 0) {
             free(tok);
             break;
-        } else if (strcmp(tok, "\'") != 0) {
+        } else if (*tok && strcmp(tok, "\'") != 0) {
             obj = isnum(tok) ? mknum(atof(tok)) : mksym(tok);
             free(tok);
             if (obj == NULL)
@@ -231,51 +258,66 @@ Object *parsetoks(Stack **s) {
     return expr;
 }
 
-/* Push all the tokens in to a stack and return it */
-Stack *gettoks(char *buf) {
+/* READ from file. Error checking happens here.
+ * Result returned as a stack of tokens */
+Stack *gettoks(FILE *fp) {
     Stack *s = stack_new();
-    char atom[ATOMLEN];
+    char atom[MAXATOM];
+    char buf[MAXLINE];
     char *str;
-    int i;
+    int i, k;
     int depth = 0;
 
-    while (*buf != '\0') {
-        if (*buf ==  '(' || *buf == ')' || *buf == '\'') {
-            if (*buf == '(')
-                depth++;
-            else if (*buf == ')')
-                depth--;
-            snprintf(atom, ATOMLEN, "%c", *buf++);
-            str = strdup(atom);
-            if (str == NULL) {
-                fprintf(stderr, "error: malloc() failed\n");
-                break;
-            }
-            stack_push(&s, str);
-        } else if (*buf != ' ' && *buf != '\n') {
-            for (i = 0; i < ATOMLEN-1; i++) {
-                if (!*buf || *buf == '\n' || *buf == ' ' || *buf == '(' || *buf == ')')
-                    break;
-                atom[i] = *buf++;
-            }
-            atom[i] = '\0';
-            str = strdup(atom);
-            if (str == NULL) {
-                fprintf(stderr, "error: malloc() failed\n");
-                break;
-            }
-            stack_push(&s, str);
+    do {
+        if (fgets(buf, MAXLINE, fp) == NULL) {
+            while (!stack_isempty(&s))
+                free(stack_pop(&s));
+            return NULL;
         }
-        /* eat whitespace */
-        while (*buf == ' ' || *buf == '\n')
-            buf++;
-    }
-    /* clean up */
-    if (*buf != '\0' || depth != 0) {
-        while (!stack_isempty(&s))
-            free(stack_pop(&s));
-        return NULL;
-    }
+        for (k = 0; k < strlen(buf);) {
+            if (buf[k] ==  '(' || buf[k] == ')' || buf[k] == '\'') {
+                if (buf[k] == '(') {
+                    ++depth;
+                } else if (buf[k] == ')') {
+                    /* break condition 1: too many close parens */
+                    if (--depth < 0) {
+                        fprintf(stderr, "lisp: unexpected close parens\n");
+                        break;
+                    }
+                }
+                snprintf(atom, MAXATOM, "%c", buf[k++]);
+                str = strdup(atom);
+                if (str == NULL) {
+                    /* break condition 2: memory allocation error */
+                    fprintf(stderr, "error: malloc() failed\n");
+                    break;
+                }
+                stack_push(&s, str);
+            } else if (buf[k] != ' ' && buf[k] != '\n') {
+                for (i = 0; i < MAXATOM-1; i++, k++) {
+                    if (buf[k] == '\n' || buf[k] == ' ' || buf[k] == '(' || buf[k] == ')')
+                        break;
+                    atom[i] = buf[k];
+                }
+                atom[i] = '\0';
+                str = strdup(atom);
+                if (str == NULL) {
+                    fprintf(stderr, "error: malloc() failed\n");
+                    break;
+                }
+                stack_push(&s, str);
+            }
+            /* eat whitespace */
+            while (buf[k] == ' ' || buf[k] == '\n')
+                k++;
+        }
+        if (buf[k] != '\0') {
+            while (!stack_isempty(&s))
+                free(stack_pop(&s));
+            return NULL;
+        }
+    } while (depth != 0);
+
     return s;
 }
 
@@ -285,8 +327,6 @@ int isnum(char *atom) {
 
     if (*atom == '-')
         atom++;
-    if (*atom == '\0')
-        return 0;
     for (; *atom != '\0'; atom++) {
         if (*atom == '.') {
             if (++decimalcount > 1)
