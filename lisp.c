@@ -14,11 +14,12 @@
 #define CAR(x)          ((x->data.pair)[0])
 #define CDR(x)          ((x->data.pair)[1])
 #define CONS(x, y)      (mkpair(x, y))
+#define KEY             CAR
+#define VAL             CDR
 
 enum otype { SYM, NUM, PAIR, NIL };
 typedef struct Object Object;
 struct Object {
-    int gc_counter;
     union {
         char *symbol;
         float number;
@@ -29,7 +30,7 @@ struct Object {
 
 Object *read(FILE *fp);
 Object *eval(Object *obj, Object *env); //todo
-void print(Object *obj);
+void print(FILE *fp, Object *obj);
 Object *mkobj(void *data, enum otype type);
 Object *mknum(float f);
 Object *mksym(char *symbol);
@@ -44,7 +45,8 @@ int isnum(char *atom);
 int islst(Object *obj);
 void bindvar(Object **frame, Object *sym, Object *val);
 Object *initglobal(void);
-Object *extendenv(Object *listofvars, Object *listofvals, Object *env);
+int compsym(Object *o, Object *p);
+void evaldef(Object *exp, Object *env);
 
 int main(void) {
     Object *obj;
@@ -69,6 +71,12 @@ void setcdr(Object *pair, Object *obj) {
     CDR(pair) = obj;
 }
 
+int compsym(Object *o, Object *p) {
+    if (o->type == SYM && p->type == SYM)
+        return !strcmp(o->data.symbol, p->data.symbol);
+    return 0;
+}
+
 /* 
  * Return a new empty global environment.
  */
@@ -80,13 +88,30 @@ Object *initglobal(void) {
  * Bind the symbol to the value, and add the pair to the top level frame of the 
  * environment.
  */
-void eval_define(Object *symbol, Object *value, Object *env) {
-    Object *frame, *kvpair;
+void evaldef(Object *exp, Object *env) {
+    Object *symbol, *value;
 
-    kvpair = CONS(symbol, value);
-    if (kvpair == NULL)
-        return;
-    setcar(env, CONS(kvpair, CAR(env)));
+    symbol = CAR(CDR(exp));
+    value = CAR(CDR(CDR(exp)));
+    setcar(env, CONS(CONS(symbol, value), CAR(env)));
+}
+
+/*
+ * findsym()
+ */
+Object *findsym(Object *symbol, Object *env) {
+    Object *p, *q;
+
+    /* cycle through environment */
+    for (p = env; p->type != NIL; p = CDR(p)) {
+        /* cycle through frame */
+        for (q = CAR(p); q->type != NIL; q = CDR(q)) {
+            if (compsym(KEY(CAR(q)), symbol))
+                return VAL(CAR(q));
+        }
+    }
+
+    return NULL;
 }
 
 /* 
@@ -110,7 +135,7 @@ Object *eval(Object *obj, Object *env) {
  */
 void print(FILE *fp, Object *obj) {
     printobj(fp, obj, 0);
-    fprintf(stderr, "\n");
+    fprintf(fp, "\n");
 }
 
 /*
@@ -140,9 +165,6 @@ Object *mkobj(void *data, enum otype type) {
     } 
     /* If type is NIL, only assign the object a type */
     obj->type = type;
-    /* If garbage collector counter > 0 then don't free the
-     * object when we're done with it */
-    obj->gc_counter = 0;
     return obj;
 }
 
@@ -161,7 +183,7 @@ Object *mknum(float f) {
 }
 
 /* 
- * Return a new number OBJECT
+ * Return a new empty list
  */
 Object *mknil(void) {
     return mkobj(NULL, NIL);
@@ -226,16 +248,16 @@ void printobj(FILE *fp, Object *obj, int flag_cancel) {
     } else if (obj->type == PAIR) {
         if (flag_cancel == 0)
             fprintf(fp, "(");
-        printobj(CAR(obj), 0);
+        printobj(fp, CAR(obj), 0);
         /* check next object */
         if (CDR(obj)->type == SYM || CDR(obj)->type == NUM) {
             fprintf(fp, " . ");
-            printobj(CDR(obj), 0);
+            printobj(fp, CDR(obj), 0);
             fprintf(fp, ")");
         } else {
             if (CDR(obj)->type != NIL)
                 fprintf(fp, " ");
-            printobj(CDR(obj), 1);
+            printobj(fp, CDR(obj), 1);
         }
     } else if (obj->type == NIL) {
         if (flag_cancel == 0)
