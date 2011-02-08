@@ -1,7 +1,6 @@
-/* lisp.c - minimal lisp interpreter 
- * author: Eugene Ma (edma2)
- * TODO: environments, lambda procs, numerical tower?
- * pair == 2 item array?
+/* 
+ * Minimal LISP interpreter - lisp.c
+ * Written by Eugene Ma (edma2)
  */
 #include <stdlib.h>
 #include <string.h>
@@ -10,132 +9,71 @@
 
 #define MAXATOM         100
 #define MAXLINE         1000
-#define ISDIGIT(c)      (c >= '0' && c <= '9')
-#define CAR(x)          ((x->data.pair)[0])
-#define CDR(x)          ((x->data.pair)[1])
-#define CONS(x, y)      (mkpair(x, y))
-#define KEY             CAR
-#define VAL             CDR
+#define is_digit(c)     (c >= '0' && c <= '9')
+#define is_space(c)     (c == ' ' || c == '\n')
+#define car(x)          ((x->data.pair)[0])
+#define cdr(x)          ((x->data.pair)[1])
+#define cons(x, y)      (make_pair(x, y))
 
 enum otype { SYM, NUM, PAIR, NIL };
 typedef struct Object Object;
 struct Object {
-    union {
-        char *symbol;
-        float number;
-        Object *pair[2];
-    } data;
-    enum otype type;
+        union {
+                char *symbol;
+                float number;
+                Object *pair[2];
+        } data;
+        enum otype type;
+        int refcount;
 };
 
+Object *make_obj(void *data, enum otype type);
+Object *make_number(float f);
+Object *make_symbol(char *symbol);
+Object *make_pair(Object *car, Object *cdr);
+Object *make_nil(void);
 Object *read(FILE *fp);
-Object *eval(Object *obj, Object *env); //todo
+Object *parse_tokens(Stack **s);
+Stack *get_tokens(FILE *fp);
+char *get_token(FILE *fp);
+Stack *push_tokens(FILE *fp);
 void print(FILE *fp, Object *obj);
-Object *mkobj(void *data, enum otype type);
-Object *mknum(float f);
-Object *mksym(char *symbol);
-Object *mkpair(Object *car, Object *cdr);
-Object *mknil(void);
-Stack *gettoks(FILE *fp);
-Object *parsetoks(Stack **s);
-void freeobj(Object *obj);
-void freelst(Object *obj);
-void printobj(FILE *fp, Object *obj, int cancelout);
-int isnum(char *atom);
-int islst(Object *obj);
-void bindvar(Object **frame, Object *sym, Object *val);
-Object *initglobal(void);
-int compsym(Object *o, Object *p);
-void evaldef(Object *exp, Object *env);
+void print_obj(FILE *fp, Object *obj, int cancelout);
+void free_obj(Object *obj);
+int is_number(char *atom);
 
 int main(void) {
-    Object *obj;
+        Object *obj;
 
-    /* (loop (print (eval (read) global))) */
-    while (1) {
-        print(stdout, eval(obj = read(stdin), NULL));
-        freeobj(obj);
-    }
-    return 0;
-}
-
-void setcar(Object *pair, Object *obj) {
-    if (pair == NULL || obj == NULL)
-        return;
-    CAR(pair) = obj;
-}
-
-void setcdr(Object *pair, Object *obj) {
-    if (pair == NULL || obj == NULL)
-        return;
-    CDR(pair) = obj;
-}
-
-int compsym(Object *o, Object *p) {
-    if (o->type == SYM && p->type == SYM)
-        return !strcmp(o->data.symbol, p->data.symbol);
-    return 0;
-}
-
-/* 
- * Return a new empty global environment.
- */
-Object *initglobal(void) {
-    return CONS(mknil(), mknil());
-}
-
-/*
- * Bind the symbol to the value, and add the pair to the top level frame of the 
- * environment.
- */
-void evaldef(Object *exp, Object *env) {
-    Object *symbol, *value;
-
-    symbol = CAR(CDR(exp));
-    value = CAR(CDR(CDR(exp)));
-    setcar(env, CONS(CONS(symbol, value), CAR(env)));
-}
-
-/*
- * findsym()
- */
-Object *findsym(Object *symbol, Object *env) {
-    Object *p, *q;
-
-    /* cycle through environment */
-    for (p = env; p->type != NIL; p = CDR(p)) {
-        /* cycle through frame */
-        for (q = CAR(p); q->type != NIL; q = CDR(q)) {
-            if (compsym(KEY(CAR(q)), symbol))
-                return VAL(CAR(q));
+        /* (loop (print (eval (read) global))) */
+        while (1) {
+                obj = read(stdin);
+                if (obj == NULL)
+                        break;
+                print(stdout, obj);
+                free_obj(obj);
         }
-    }
-
-    return NULL;
+        return 0;
 }
 
 /* 
  * Reads user input and returns the expression as a Lisp list.
  */
 Object *read(FILE *fp) {
-    Stack *s;
+        Stack *s;
 
-    printf("> ");
-    s = gettoks(fp);
+        printf("> ");
+        s = push_tokens(fp);
 
-    return parsetoks(&s);
-}
-
-Object *eval(Object *obj, Object *env) {
-    return obj;
+        return parse_tokens(&s);
 }
 
 /*
  * Print the object in a readable and sane format.
  */
 void print(FILE *fp, Object *obj) {
-    printobj(fp, obj, 0);
-    fprintf(fp, "\n");
+        print_obj(fp, obj, 0);
+        fprintf(fp, "\n");
 }
 
 /*
@@ -143,50 +81,52 @@ void print(FILE *fp, Object *obj) {
  * object creation function, programmers should only directly call the higher order mk* 
  * functions.
  */
-Object *mkobj(void *data, enum otype type) {
-    Object *obj;
+Object *make_obj(void *data, enum otype type) {
+        Object *obj;
 
-    obj = malloc(sizeof(Object));
-    if (obj == NULL)
-        return NULL;
-    if (type == SYM) {
-        obj->data.symbol = strdup((char *)data);
-        /* Check that strdup succeeded */
-        if (obj->data.symbol == NULL) {
-            fprintf(stderr, "error: malloc() failed\n");
-            free(obj);
-            return NULL;
-        }
-    } else if (type == NUM) {
-        obj->data.number = *(float *)data; 
-    } else if (type == PAIR) {
-        CAR(obj) = ((Object **)data)[0];
-        CDR(obj) = ((Object **)data)[1];
-    } 
-    /* If type is NIL, only assign the object a type */
-    obj->type = type;
-    return obj;
+        obj = malloc(sizeof(Object));
+        if (obj == NULL)
+                return NULL;
+        if (type == SYM) {
+                obj->data.symbol = strdup((char *)data);
+                /* Check that strdup succeeded */
+                if (obj->data.symbol == NULL) {
+                        fprintf(stderr, "error: malloc() failed\n");
+                        free(obj);
+                        return NULL;
+                }
+        } else if (type == NUM) {
+                obj->data.number = *(float *)data; 
+        } else if (type == PAIR) {
+                car(obj) = ((Object **)data)[0];
+                cdr(obj) = ((Object **)data)[1];
+        } 
+        /* If type is NIL, only assign the object a type */
+        obj->type = type;
+        /* Initialize all reference counts to 0 */
+        obj->refcount = 0;
+        return obj;
 }
 
 /* 
  * Return a new symbol OBJECT
  */
-Object *mksym(char *symbol) {
-    return mkobj(symbol, SYM);
+Object *make_symbol(char *symbol) {
+        return make_obj(symbol, SYM);
 }
 
 /* 
  * Return a new number OBJECT
  */
-Object *mknum(float f) {
-    return mkobj(&f, NUM);
+Object *make_number(float f) {
+        return make_obj(&f, NUM);
 }
 
 /* 
  * Return a new empty list
  */
-Object *mknil(void) {
-    return mkobj(NULL, NIL);
+Object *make_nil(void) {
+        return make_obj(NULL, NIL);
 }
 
 /* 
@@ -194,212 +134,190 @@ Object *mknil(void) {
  * that when constructing multiple pairs using CONS, they will all fail if one call 
  * returns NULL.
  */
-Object *mkpair(Object *car, Object *cdr) {
-    Object *pair[2];
+Object *make_pair(Object *car, Object *cdr) {
+        Object *pair[2];
 
-    if (car == NULL || cdr == NULL)
-        return NULL;
-    pair[0] = car;
-    pair[1] = cdr;
+        if (car == NULL || cdr == NULL)
+                return NULL;
+        pair[0] = car;
+        pair[1] = cdr;
 
-    return mkobj(pair, PAIR);
+        return make_obj(pair, PAIR);
 }
 
 /*
  * Free the object. If object is a pair, then recursively free the car and cdr 
  * elements and so on.
  */
-void freeobj(Object *obj) {
-    if (obj == NULL)
-        return;
-    if (obj->type == SYM) {
-        free(obj->data.symbol);
-    } else if (obj->type == PAIR) {
-        /* Recursively free the pair */
-        freeobj(CAR(obj));
-        freeobj(CDR(obj));
-    }
-    free(obj);
-}
-
-/* 
- * Free the CONS-PAIR backbone holding the list of elements together. Does NOT free 
- * objects that were pointed to by the list.
- */
-void freelst(Object *lst) {
-    Object *cdr;
-    for (; lst->type == PAIR; lst = cdr) {
-        cdr = CDR(lst);
-        free(lst);
-    }
+void free_obj(Object *obj) {
+        if (obj == NULL)
+                return;
+        if (obj->type == SYM) {
+                free(obj->data.symbol);
+        } else if (obj->type == PAIR) {
+                /* Recursively free the pair */
+                free_obj(car(obj));
+                free_obj(cdr(obj));
+        }
+        free(obj);
 }
 
 /* 
  * Print a nicely formatted object.
  */
-void printobj(FILE *fp, Object *obj, int flag_cancel) {
-    if (obj == NULL) {
-        fprintf(stderr, "print: missing object");
-    } else if (obj->type == NUM) {
-        /* XXX: remove trailing zeroes */
-        fprintf(fp, "%f", obj->data.number);
-    } else if (obj->type == SYM) {
-        fprintf(fp, "%s", obj->data.symbol);
-    } else if (obj->type == PAIR) {
-        if (flag_cancel == 0)
-            fprintf(fp, "(");
-        printobj(fp, CAR(obj), 0);
-        /* check next object */
-        if (CDR(obj)->type == SYM || CDR(obj)->type == NUM) {
-            fprintf(fp, " . ");
-            printobj(fp, CDR(obj), 0);
-            fprintf(fp, ")");
+void print_obj(FILE *fp, Object *obj, int flag_cancel) {
+        if (obj == NULL) {
+                fprintf(stderr, "print: missing object");
+        } else if (obj->type == NUM) {
+                /* XXX: remove trailing zeroes */
+                fprintf(fp, "%f", obj->data.number);
+        } else if (obj->type == SYM) {
+                fprintf(fp, "%s", obj->data.symbol);
+        } else if (obj->type == PAIR) {
+                if (flag_cancel == 0)
+                        fprintf(fp, "(");
+                print_obj(fp, car(obj), 0);
+                /* check next object */
+                if (cdr(obj)->type == SYM || cdr(obj)->type == NUM) {
+                        fprintf(fp, " . ");
+                        print_obj(fp, cdr(obj), 0);
+                        fprintf(fp, ")");
+                } else {
+                        if (cdr(obj)->type != NIL)
+                                fprintf(fp, " ");
+                        print_obj(fp, cdr(obj), 1);
+                }
+        } else if (obj->type == NIL) {
+                if (flag_cancel == 0)
+                        fprintf(fp, "(");
+                fprintf(fp, ")");
         } else {
-            if (CDR(obj)->type != NIL)
-                fprintf(fp, " ");
-            printobj(fp, CDR(obj), 1);
+                fprintf(fp, "error: unknown object type\n");
         }
-    } else if (obj->type == NIL) {
-        if (flag_cancel == 0)
-            fprintf(fp, "(");
-        fprintf(fp, ")");
-    } else {
-        fprintf(fp, "error: unknown object type\n");
-    }
 }
 
 /* 
  * Given a stack of tokens returned by gettok, turn it into a Lisp list we 
- * can access using CAR and CDR.
+ * can access using car and cdr.
  */
-Object *parsetoks(Stack **s) {
-    Object *obj, *expr = NULL;
-    char *tok;
+Object *parse_tokens(Stack **s) {
+        Object *obj, *expr = NULL;
+        char *tok;
 
-    /* fetch tokens from stack */
-    while (!stack_isempty(s)) {
-        tok = stack_pop(s);
-        /* examine token */
-        if (strcmp(tok, ")") == 0) {
-            if (expr == NULL) {
-                free(tok);
-                expr = mknil();
-                continue;
-            } else {
-                /* put it back on the stack and recurse */
-                stack_push(s, tok);
-                obj = parsetoks(s);
-            }
-        } else if (strcmp(tok, "(") == 0) {
-            free(tok);
-            break;
-        } else if (*tok && strcmp(tok, "\'") != 0) {
-            obj = isnum(tok) ? mknum(atof(tok)) : mksym(tok);
-            free(tok);
-            if (obj == NULL)
-                break;
-            /* symbol atom */
-            if (expr == NULL) {
-                expr = obj;
-                break;
-            }
+        /* Fetch tokens from stack */
+        while (!stack_isempty(s)) {
+                /* Fetch token */
+                tok = stack_pop(s);
+                /* 
+                 * If token is a close paren, then call this function to build the 
+                 * expression recursively until we see an open paren.
+                 */
+                if (tok[0] == ')') {
+                        /* Last item of list is always an empty list */
+                        if (expr == NULL) {
+                                free(tok);
+                                expr = make_nil();
+                                continue;
+                        } else {
+                                stack_push(s, tok);
+                                obj = parse_tokens(s);
+                        }
+                } else if (tok[0] == '(') {
+                        free(tok);
+                        break;
+                } else if (tok[0] != '\0' && tok[0] != '\'') {
+                        obj = is_number(tok) ? make_number(atof(tok)) : make_symbol(tok);
+                        free(tok);
+                        if (obj == NULL)
+                                break;
+                        if (expr == NULL) {
+                                expr = obj;
+                                break;
+                        }
+                }
+                /* Take care of inner quotes */
+                while (!stack_isempty(s) && ((char *)stack_top(s))[0] == '\'') {
+                        free(stack_pop(s));
+                        obj = cons(make_symbol("quote"), cons(obj, make_nil()));
+                }
+                expr = cons(obj, expr);
         }
-        /* check the top for quote */
-        while (!stack_isempty(s) && strcmp((char *)stack_top(s), "\'") == 0) {
-            /* pop it off */
-            free(stack_pop(s));
-            obj = CONS(mksym("quote"), CONS(obj, mknil()));
+        /* Take care of outer quote */
+        while (!stack_isempty(s) && ((char *)stack_top(s))[0] == '\'') {
+                free(stack_pop(s));
+                expr = cons(make_symbol("quote"), cons(expr, make_nil()));
         }
-        expr = CONS(obj, expr);
-    }
-    while (!stack_isempty(s) && strcmp((char *)stack_top(s), "\'") == 0) {
-        free(stack_pop(s));
-        expr = CONS(mksym("quote"), CONS(expr, mknil()));
-    }
-    return expr;
+        return expr;
 }
 
 /* 
- * Read from file. Parentheses matching error checking happens here. Result is returned 
- * as a stack of tokens which the programmer should then pass to parsetoks.
+ * Read the next token from file. 
+ */ 
+char *get_token(FILE *fp) {
+        char tok[MAXATOM];
+        char c;
+        int i;
+        
+        /* Eat up whitespace */
+        do {
+                if ((c = getc(fp)) == EOF)
+                        return NULL;
+        } while (is_space(c));
+        /* Stop at first non-whitespace char */
+        if (strchr("()\'", c) != NULL) {
+                tok[0] = c;
+                tok[1] = '\0';
+        } else {
+                for (i = 0; i < MAXATOM; i++) {
+                        /* Stop at first whitespace or special char */
+                        if (is_space(c) || strchr("()\'", c) != NULL) {
+                                ungetc(c, fp);
+                                tok[i] = '\0';
+                                break;
+                        }
+                        tok[i] = c;
+                        if ((c = getc(fp)) == EOF)
+                                return NULL;
+                }
+        }
+        return strdup(tok);
+}
+
+/* 
+ * Push tokens into a stack 
  */
-Stack *gettoks(FILE *fp) {
-    Stack *s = stack_new();
-    char atom[MAXATOM];
-    char buf[MAXLINE];
-    char *str;
-    int i, k;
-    int depth = 0;
+Stack *push_tokens(FILE *fp) {
+        Stack *s = stack_new();
+        char *tok;
+        int depth = 0;
 
-    do {
-        if (fgets(buf, MAXLINE, fp) == NULL) {
-            while (!stack_isempty(&s))
-                free(stack_pop(&s));
-            return NULL;
-        }
-        for (k = 0; k < strlen(buf);) {
-            if (buf[k] ==  '(' || buf[k] == ')' || buf[k] == '\'') {
-                if (buf[k] == '(') {
-                    ++depth;
-                } else if (buf[k] == ')') {
-                    /* break condition 1: too many close parens */
-                    if (--depth < 0) {
-                        fprintf(stderr, "lisp: unexpected close parens\n");
+        do {
+                /* If error free stack and return NULL */
+                if ((tok = get_token(fp)) == NULL) {
+                        while (!stack_isempty(&s))
+                                free(stack_pop(&s));
                         break;
-                    }
                 }
-                snprintf(atom, MAXATOM, "%c", buf[k++]);
-                str = strdup(atom);
-                if (str == NULL) {
-                    /* break condition 2: memory allocation error */
-                    fprintf(stderr, "error: malloc() failed\n");
-                    break;
+                if (tok[0] == '(')
+                        ++depth;
+                else if (tok[0] == ')') {
+                        if (--depth < 0) {
+                                fprintf(stderr, "error: unexpected ')'\n");
+                                free(tok);
+                                break;
+                        }
                 }
-                stack_push(&s, str);
-            } else if (buf[k] != ' ' && buf[k] != '\n') {
-                for (i = 0; i < MAXATOM-1; i++, k++) {
-                    if (buf[k] == '\n' || buf[k] == ' ' || buf[k] == '(' || buf[k] == ')')
-                        break;
-                    atom[i] = buf[k];
-                }
-                atom[i] = '\0';
-                str = strdup(atom);
-                if (str == NULL) {
-                    fprintf(stderr, "error: malloc() failed\n");
-                    break;
-                }
-                stack_push(&s, str);
-            }
-            /* eat whitespace */
-            while (buf[k] == ' ' || buf[k] == '\n')
-                k++;
-        }
-        if (buf[k] != '\0') {
-            while (!stack_isempty(&s))
-                free(stack_pop(&s));
-            return NULL;
-        }
-    } while (depth != 0);
-
-    return s;
+                stack_push(&s, tok);
+        } while (tok[0] == '\'' || depth > 0);
+        return s;
 }
 
 /* 
  * Simple boolean that returns non-zero if the string is real number.
  */
-int isnum(char *atom) {
-    int decimalcount = 0;
-
-    if (*atom == '-')
-        atom++;
-    for (; *atom != '\0'; atom++) {
-        if (*atom == '.') {
-            if (++decimalcount > 1)
-                break;
-        } else if (!ISDIGIT(*atom)) {
-            break;
-        }
-    }
-    /* check if we reached the end */
-    return (*atom == '\0') ? 1 : 0;
+int is_number(char *atom) {
+        for (; is_digit(*atom); atom++);
+        if (*atom == '.')
+                for (atom++; is_digit(*atom); atom++);
+        return (*atom == '\0');
 }
