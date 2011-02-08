@@ -5,16 +5,8 @@
  * ^ top                       ^bottom
  */
 
-Stack *stack_new(void) {
-    return NULL;
-}
-
-int stack_isempty(Stack **s) {
-    return (*s == NULL);
-}
-
 void *stack_top(Stack **s) {
-    if (stack_isempty(s))
+    if (*s == NULL)
         return NULL;
     return (*s)->item;
 }
