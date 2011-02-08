@@ -48,8 +48,6 @@ int main(void) {
         /* (loop (print (eval (read) global))) */
         while (1) {
                 obj = read(stdin);
-                if (obj == NULL)
-                        break;
                 print(stdout, obj);
                 free_obj(obj);
         }
@@ -205,7 +203,7 @@ Object *parse_tokens(Stack **s) {
         char *tok;
 
         /* Fetch tokens from stack */
-        while (!stack_isempty(s)) {
+        while (*s != NULL) {
                 /* Fetch token */
                 tok = stack_pop(s);
                 /* 
@@ -236,14 +234,14 @@ Object *parse_tokens(Stack **s) {
                         }
                 }
                 /* Take care of inner quotes */
-                while (!stack_isempty(s) && ((char *)stack_top(s))[0] == '\'') {
+                while (*s != NULL && ((char *)stack_top(s))[0] == '\'') {
                         free(stack_pop(s));
                         obj = cons(make_symbol("quote"), cons(obj, make_nil()));
                 }
                 expr = cons(obj, expr);
         }
         /* Take care of outer quote */
-        while (!stack_isempty(s) && ((char *)stack_top(s))[0] == '\'') {
+        while (*s != NULL && ((char *)stack_top(s))[0] == '\'') {
                 free(stack_pop(s));
                 expr = cons(make_symbol("quote"), cons(expr, make_nil()));
         }
@@ -287,20 +285,20 @@ char *get_token(FILE *fp) {
  * Push tokens into a stack 
  */
 Stack *push_tokens(FILE *fp) {
-        Stack *s = stack_new();
+        Stack *s = NULL;
         char *tok;
         int depth = 0;
 
         do {
                 /* If error free stack and return NULL */
                 if ((tok = get_token(fp)) == NULL) {
-                        while (!stack_isempty(&s))
+                        while (s != NULL)
                                 free(stack_pop(&s));
                         break;
                 }
-                if (tok[0] == '(')
+                if (tok[0] == '(') {
                         ++depth;
-                else if (tok[0] == ')') {
+                } else if (tok[0] == ')') {
                         if (--depth < 0) {
                                 fprintf(stderr, "error: unexpected ')'\n");
                                 free(tok);
